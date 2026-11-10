@@ -1,0 +1,14 @@
+{
+  "name": "iphone-stock-checker",
+  "version": "1.0.0",
+  "description": "Check live in-store pickup availability of iPhones at Apple Stores near you.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": { "node": ">=18.17" },
+  "scripts": {
+    "start": "node server.js",
+    "demo": "DEMO=1 node server.js",
+    "test": "node --test"
+  }
+}

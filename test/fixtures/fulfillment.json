@@ -1,0 +1,44 @@
+{
+  "head": { "status": "200", "data": {} },
+  "body": {
+    "content": {
+      "pickupMessage": {
+        "stores": [
+          {
+            "storeNumber": "R245",
+            "storeName": "SoHo",
+            "city": "New York",
+            "state": "NY",
+            "storedistance": 1.9,
+            "storeDistanceWithUnit": "1.9 mi",
+            "phoneNumber": "(212) 226-3126",
+            "retailStore": { "address": { "address2": "103 Prince Street", "city": "New York", "postalCode": "10012" } },
+            "partsAvailability": {
+              "MJWA4LL/A": {
+                "pickupDisplay": "available",
+                "pickupSearchQuote": "Available<br/>Today",
+                "messageTypes": { "regular": { "storePickupQuote": "Today at SoHo" } }
+              },
+              "MJQ34LL/A": {
+                "pickupDisplay": "unavailable",
+                "pickupSearchQuote": "Currently unavailable"
+              }
+            }
+          },
+          {
+            "storeNumber": "R095",
+            "storeName": "Fifth Avenue",
+            "city": "New York",
+            "state": "NY",
+            "storedistance": 0.8,
+            "storeDistanceWithUnit": "0.8 mi",
+            "partsAvailability": {
+              "MJWA4LL/A": { "pickupDisplay": "ineligible", "pickupSearchQuote": "Not available" },
+              "MJQ34LL/A": { "pickupDisplay": "available", "pickupSearchQuote": "Available Tomorrow" }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
