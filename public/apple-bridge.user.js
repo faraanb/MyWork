@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iPhone Stock Checker – Apple bridge
 // @namespace    iphone-stock-checker
-// @version      1.0.1
+// @version      1.0.2
 // @description  Lets the local iPhone Stock Checker page ask Apple for pickup availability from your own browser.
 // @match        http://localhost/*
 // @match        http://127.0.0.1/*
@@ -20,11 +20,15 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.0.1';
+  const VERSION = '1.0.2';
   const ALLOWED = /^https:\/\/www\.apple\.com\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?shop\/fulfillment-messages\?/;
+  // Called as a method on GM (some managers need `this`), else the legacy global.
   const gmRequest =
-    (typeof GM !== 'undefined' && GM.xmlHttpRequest) ||
-    (typeof GM_xmlhttpRequest !== 'undefined' && GM_xmlhttpRequest);
+    typeof GM !== 'undefined' && GM.xmlHttpRequest
+      ? (opts) => GM.xmlHttpRequest(opts)
+      : typeof GM_xmlhttpRequest !== 'undefined'
+        ? GM_xmlhttpRequest
+        : null;
 
   // Only answer the checker page, which sets this meta tag.
   const isCheckerPage = () => !!document.querySelector('meta[name="isc-app"]');
@@ -54,17 +58,24 @@
         return reply({ type: 'response', id, error: 'URL not allowed by the bridge.' });
       }
       if (!gmRequest) return reply({ type: 'response', id, error: 'Your userscript manager does not support GM.xmlHttpRequest.' });
-      gmRequest({
-        method: 'GET',
-        url,
-        timeout: 15000,
-        onload: (r) => {
-          const type = /content-type:\s*([^\r\n]+)/i.exec(r.responseHeaders || '')?.[1] || '';
-          reply({ type: 'response', id, status: r.status, contentType: type, body: r.responseText });
-        },
-        onerror: () => reply({ type: 'response', id, error: 'Network error reaching apple.com.' }),
-        ontimeout: () => reply({ type: 'response', id, error: 'apple.com took too long to answer.' }),
-      });
+      try {
+        const r = gmRequest({
+          method: 'GET',
+          url,
+          timeout: 15000,
+          onload: (r) => {
+            const type = /content-type:\s*([^\r\n]+)/i.exec(r.responseHeaders || '')?.[1] || '';
+            reply({ type: 'response', id, status: r.status, contentType: type, body: r.responseText });
+          },
+          onerror: () => reply({ type: 'response', id, error: 'Network error reaching apple.com.' }),
+          ontimeout: () => reply({ type: 'response', id, error: 'apple.com took too long to answer.' }),
+          onabort: () => reply({ type: 'response', id, error: 'The request to apple.com was blocked or cancelled by the userscript manager.' }),
+        });
+        // GM.xmlHttpRequest may return a promise; surface its rejection too.
+        r?.catch?.((err) => reply({ type: 'response', id, error: `Bridge request failed: ${err?.message || err}` }));
+      } catch (err) {
+        reply({ type: 'response', id, error: `Bridge request failed: ${err?.message || err}` });
+      }
     }
   });
 
