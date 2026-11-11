@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node server.js",
     "demo": "DEMO=1 node server.js",
+    "watch": "node watch.js",
     "test": "node --test"
   }
 }
