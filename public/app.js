@@ -1,3 +1,6 @@
+import { fetchAvailability } from '/lib/apple.js';
+import { detectBridge, bridgeTransport } from './bridge.js';
+
 const $ = (sel) => document.querySelector(sel);
 const els = {
   form: $('#controls'),
@@ -9,6 +12,8 @@ const els = {
   interval: $('#interval'),
   notify: $('#notify'),
   onlyAvail: $('#onlyAvail'),
+  ntfy: $('#ntfy'),
+  mode: $('#mode'),
   status: $('#status'),
   results: $('#results'),
 };
@@ -22,6 +27,7 @@ const SWATCH = {
   pink: '#f5c6d0', teal: '#9fcfcf', ultramarine: '#5a6fd6', green: '#cfe3cf', yellow: '#f7e8a4',
   burgundy: '#6d2533', glacier: '#d7e6ee', naturaltitanium: '#c2bcb2', deserttitanium: '#c9b49a',
   whitetitanium: '#ecebe7', blacktitanium: '#3c3c3d',
+  nightsky: '#22283a', starwhite: '#f2f1ec', softpink: '#f3d3d6',
 };
 
 const state = {
@@ -31,7 +37,10 @@ const state = {
   previouslyAvailable: null, // Set of "store|part" from the previous check
   timer: null,
   busy: false,
+  bridge: null, // { version } when the Apple bridge userscript is installed
+  recent: null, // { key, at, stores } — avoid re-asking Apple within 30 s
 };
+const RECENT_MS = 30000;
 
 // ---------- persistence ----------
 const store = {
@@ -46,6 +55,7 @@ function saveSettings() {
     model: els.model.value,
     interval: els.interval.value,
     onlyAvail: els.onlyAvail.checked,
+    ntfy: els.ntfy.value.trim(),
     selected: Object.fromEntries(Object.entries(state.selected).map(([k, v]) => [k, [...v]])),
   });
 }
@@ -54,7 +64,7 @@ function saveSettings() {
 async function api(path, params) {
   const res = await fetch(`${path}?${new URLSearchParams(params)}`);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(body.error || `Request failed (${res.status})`), { code: body.code });
   return body;
 }
 
@@ -143,23 +153,65 @@ async function check() {
   els.check.disabled = true;
   setStatus(`Checking ${parts.length} configuration${parts.length === 1 ? '' : 's'} near ${esc(loc)}…`);
   try {
-    const result = await api('/api/availability', {
-      country: els.country.value,
-      location: loc,
-      parts: parts.join(','),
-      ...(DEMO ? { demo: '1' } : {}),
-    });
+    const result = await getAvailability(els.country.value, loc, parts);
     const fresh = diffNew(result);
     state.lastResult = { ...result, configs, fresh };
     render();
     if (fresh.size && state.previouslyAvailable !== null) alertNew(result, fresh, configs);
     state.previouslyAvailable = availableKeys(result);
   } catch (err) {
-    setStatus(esc(err.message), 'error');
+    if (err.code === 'apple_blocked') showBlocked(err.message);
+    else setStatus(esc(err.message), 'error');
   } finally {
     state.busy = false;
     els.check.disabled = false;
     schedule();
+  }
+}
+
+async function getAvailability(country, location, parts) {
+  if (DEMO) {
+    return api('/api/availability', { country, location, parts: parts.join(','), demo: '1' });
+  }
+  if (!state.bridge) {
+    return { ...(await api('/api/availability', { country, location, parts: parts.join(',') })), via: 'server' };
+  }
+  // Browser mode: ask Apple from this browser via the userscript.
+  const key = `${country}|${location.toLowerCase()}|${[...parts].sort().join(',')}`;
+  let stores;
+  if (state.recent?.key === key && Date.now() - state.recent.at < RECENT_MS) {
+    stores = state.recent.stores;
+  } else {
+    stores = await fetchAvailability(country, location, parts, { transport: bridgeTransport });
+    state.recent = { key, at: Date.now(), stores };
+  }
+  return { country, location, demo: false, via: 'browser', checkedAt: new Date().toISOString(), stores };
+}
+
+function showBlocked(message) {
+  const steps = state.bridge
+    ? `<ol>
+        <li>Open <a href="https://www.apple.com/shop/buy-iphone" target="_blank" rel="noopener">apple.com/shop/buy-iphone</a> in this browser and browse a page or two, then try again.</li>
+        <li>If it keeps happening, use a slower auto-refresh interval. Apple may be rate-limiting you.</li>
+      </ol>`
+    : `<ol>
+        <li>Install a userscript manager: <a href="https://www.tampermonkey.net" target="_blank" rel="noopener">Tampermonkey</a> or <a href="https://violentmonkey.github.io" target="_blank" rel="noopener">Violentmonkey</a>.</li>
+        <li>Install the <a href="/apple-bridge.user.js" target="_blank">Apple bridge userscript</a>. It sends availability requests from your browser instead of this server.</li>
+        <li>Reload this page and check again.</li>
+      </ol>`;
+  setStatus(`<b>${esc(message)}</b>${steps}`, 'error');
+}
+
+function renderMode() {
+  if (DEMO) {
+    els.mode.className = 'mode';
+    els.mode.innerHTML = '<span class="dot"></span>Demo mode: availability is made up.';
+  } else if (state.bridge) {
+    els.mode.className = 'mode on';
+    els.mode.innerHTML = `<span class="dot"></span>Browser mode: stock requests go through your browser (Apple bridge v${esc(state.bridge.version)}).`;
+  } else {
+    els.mode.className = 'mode';
+    els.mode.innerHTML = '<span class="dot"></span>Apple only answers stock requests from a real browser. <a href="/apple-bridge.user.js" target="_blank">Install the Apple bridge userscript</a> (needs Tampermonkey or Violentmonkey), then reload.';
   }
 }
 
@@ -258,8 +310,8 @@ function beep() {
 }
 
 function alertNew(result, fresh, configs) {
-  if (!els.notify.checked) return;
-  beep();
+  if (!els.notify.checked && !els.ntfy.value.trim()) return;
+  if (els.notify.checked) beep();
   const byPart = Object.fromEntries(configs.map((c) => [c.partNumber, c]));
   const lines = [...fresh].slice(0, 4).map((k) => {
     const [storeNum, pn] = k.split('|');
@@ -267,11 +319,30 @@ function alertNew(result, fresh, configs) {
     const c = byPart[pn];
     return `${c ? `${c.color} ${c.capacity}` : pn} @ ${s?.name ?? storeNum}`;
   });
-  if ('Notification' in window && Notification.permission === 'granted') {
+  if (els.notify.checked && 'Notification' in window && Notification.permission === 'granted') {
     const n = new Notification(`${currentModel()?.name ?? 'iPhone'} in stock!`, { body: lines.join('\n'), tag: 'isc' });
     n.onclick = () => window.focus();
   }
   document.title = `(${fresh.size}) In stock! – iPhone Stock Checker`;
+  sendNtfy(`${currentModel()?.name ?? 'iPhone'} in stock`, lines.join('\n') + (fresh.size > lines.length ? `\n…and ${fresh.size - lines.length} more` : ''), firstUrl(fresh, byPart));
+}
+
+function firstUrl(fresh, byPart) {
+  const pn = [...fresh][0]?.split('|')[1];
+  return byPart[pn]?.url;
+}
+
+async function sendNtfy(title, body, url) {
+  const topic = els.ntfy.value.trim();
+  if (!topic) return;
+  const endpoint = /^https?:\/\//.test(topic) ? topic : `https://ntfy.sh/${encodeURIComponent(topic)}`;
+  const headers = { Title: title, Tags: 'iphone', Priority: 'high' };
+  if (url) headers.Click = url;
+  try {
+    await fetch(endpoint, { method: 'POST', headers, body });
+  } catch (err) {
+    console.warn('ntfy failed', err);
+  }
 }
 
 // ---------- auto refresh ----------
@@ -322,6 +393,7 @@ els.model.addEventListener('change', () => {
   saveSettings();
 });
 els.location.addEventListener('change', () => { resetResults(); saveSettings(); });
+els.ntfy.addEventListener('change', saveSettings);
 els.onlyAvail.addEventListener('change', () => { saveSettings(); render(); });
 els.interval.addEventListener('change', () => { saveSettings(); schedule(); });
 els.auto.addEventListener('change', () => {
@@ -348,5 +420,8 @@ window.addEventListener('focus', () => { document.title = 'iPhone Stock Checker'
   if (saved.location) els.location.value = saved.location;
   if (saved.interval) els.interval.value = saved.interval;
   els.onlyAvail.checked = !!saved.onlyAvail;
+  if (saved.ntfy) els.ntfy.value = saved.ntfy;
+  state.bridge = DEMO ? null : await detectBridge();
+  renderMode();
   await loadCatalog(saved);
 })();

@@ -79,7 +79,16 @@ async function api(url, res) {
   return send(res, 404, { error: 'Not found' });
 }
 
+const LIB_DIR = fileURLToPath(new URL('./lib/', import.meta.url));
+// Modules the browser imports directly (shared parsing / request logic).
+const BROWSER_LIB = new Set(['/lib/apple.js', '/lib/countries.js']);
+
 async function staticFile(url, res) {
+  if (BROWSER_LIB.has(url.pathname)) {
+    const body = await readFile(join(LIB_DIR, url.pathname.slice(5)));
+    res.writeHead(200, { 'content-type': MIME['.js'], 'cache-control': 'no-cache' });
+    return res.end(body);
+  }
   const rel = normalize(decodeURIComponent(url.pathname)).replace(/^([/\\])+/, '') || 'index.html';
   const file = join(PUBLIC_DIR, rel);
   if (!file.startsWith(PUBLIC_DIR)) return send(res, 403, 'Forbidden', 'text/plain');
@@ -99,7 +108,7 @@ export const server = http.createServer(async (req, res) => {
     else await staticFile(url, res);
   } catch (err) {
     console.error(`[${req.method} ${url.pathname}]`, err.message);
-    send(res, err.status || 500, { error: err.message || 'Something went wrong.' });
+    send(res, err.status || 500, { error: err.message || 'Something went wrong.', code: err.code });
   }
 });
 

@@ -22,6 +22,8 @@ You can also add `?demo=1` to the page URL to use demo data for a single tab.
 
 ## Watch from the terminal (phone alerts)
 
+> The terminal watcher calls Apple directly, not through a browser, so Apple will usually refuse it with HTTP 541 (see above). It's kept for setups where the endpoint does answer. Otherwise, use the web UI with the bridge, auto-refresh and an ntfy topic.
+
 ```bash
 node watch.js --list                                   # models, finishes, storage, carriers
 node watch.js -l 10001 -m "18 pro max" --color silver --storage 256gb,512gb \
@@ -32,7 +34,17 @@ node watch.js -l 10001 -m air --once                   # single check; exit 0 = 
 
 Names are matched loosely (`"18 pro"`, `Silver`, `256gb`). The carrier defaults to Unlocked when it's offered. The watcher polls every 120 s (minimum 60 s). It alerts only when a store or configuration *becomes* available, and it prints every in-stock hit on each check. To get phone pushes, install the ntfy app and subscribe to the same topic. Pick a hard-to-guess name, because ntfy.sh topics are public. `--ntfy` also accepts a full URL for a self-hosted server. `--webhook` POSTs JSON with `text` (Slack), `content` (Discord) and an `items` array.
 
-> **Run it from a home or office connection.** Apple blocks the availability endpoint for most cloud/datacenter IP addresses (it answers with HTTP 541). That means it fails on typical VPS/serverless hosts, while the catalog pages still load. Keep the refresh interval reasonable: the server caches each query for 30 s so it never hits Apple more than twice a minute.
+## Install the Apple bridge (needed for live stock)
+
+Apple's availability endpoint only answers requests from a real web browser. It answers anything else with **HTTP 541**, even from a home connection. The product catalog still loads from the server, but stock checks have to come from your browser:
+
+1. Install a userscript manager: [Tampermonkey](https://www.tampermonkey.net) or [Violentmonkey](https://violentmonkey.github.io).
+2. With the app running, open <http://localhost:3000/apple-bridge.user.js> and click **Install**.
+3. Reload the app. The line under the form should say **Browser mode**.
+
+The userscript ([`public/apple-bridge.user.js`](public/apple-bridge.user.js)) runs only on `localhost`/`127.0.0.1`, and it only forwards `www.apple.com/…/shop/fulfillment-messages` URLs. Those requests then go out from your browser, the same as if you had opened the Apple Store yourself. If Apple still refuses, visit apple.com/shop/buy-iphone once in the same browser and use a slower refresh. Results are cached for 30 s, so repeated clicks don't hit Apple again.
+
+To get phone alerts while the tab is open, put an [ntfy](https://ntfy.sh) topic in the *Phone alerts* field.
 
 ## How it works
 
@@ -42,6 +54,7 @@ Names are matched loosely (`"18 pro"`, `Silver`, `256gb`). The carrier defaults 
 | `lib/apple.js` → `fetchAvailability` | Calls `/{cc}/shop/fulfillment-messages?pl=true&location=…&parts.N=…` in batches of 8 part numbers. It merges the stores and normalises each part to `{available, status, quote}`. |
 | `server.js` | Static file server plus a JSON API (`/api/countries`, `/api/catalog`, `/api/availability`). Browsers can't call apple.com directly because of CORS. |
 | `watch.js`, `lib/filter.js`, `lib/notify.js` | The terminal watcher: loose model/option matching, change detection, ntfy and webhook delivery. |
+| `public/apple-bridge.user.js`, `public/bridge.js` | Browser bridge. The page posts availability URLs to the userscript, which fetches them from your browser with `GM.xmlHttpRequest`. The page then parses the response with the same `lib/apple.js` code the server uses. |
 | `public/` | The UI: filters, results grid, auto-refresh, notifications. Settings are remembered in `localStorage`. |
 
 Not affiliated with Apple. These are undocumented Apple Store endpoints, so they can change without notice.
