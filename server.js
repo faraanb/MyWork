@@ -8,7 +8,8 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COUNTRIES } from './lib/countries.js';
 import { fetchCatalog, fetchAvailability } from './lib/apple.js';
-import { demoAvailability } from './lib/demo.js';
+import { demoAvailability, demoAttAvailability } from './lib/demo.js';
+import { isZip } from './lib/att.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -68,6 +69,13 @@ async function api(url, res) {
       return send(res, 400, { error: 'Invalid part number.' });
 
     const demo = DEMO || url.searchParams.get('demo') === '1';
+    if (url.searchParams.get('retailer') === 'att') {
+      if (country !== 'us') return send(res, 400, { error: 'AT&T stores are US only.' });
+      if (!isZip(location)) return send(res, 400, { error: 'AT&T stores need a 5-digit ZIP code.', code: 'att_zip' });
+      // att.com only answers real browsers, so live AT&T checks go through the bridge, never this server.
+      if (!demo) return send(res, 400, { error: 'AT&T stores are checked through the browser bridge.', code: 'att_needs_bridge' });
+      return send(res, 200, { country, location, demo, checkedAt: new Date().toISOString(), stores: demoAttAvailability(parts) });
+    }
     const stores = demo
       ? demoAvailability(parts)
       : await cached(`avail:${country}:${location.toLowerCase()}:${parts.sort().join(',')}`, AVAILABILITY_TTL, () =>
@@ -81,7 +89,7 @@ async function api(url, res) {
 
 const LIB_DIR = fileURLToPath(new URL('./lib/', import.meta.url));
 // Modules the browser imports directly (shared parsing / request logic).
-const BROWSER_LIB = new Set(['/lib/apple.js', '/lib/countries.js']);
+const BROWSER_LIB = new Set(['/lib/apple.js', '/lib/att.js', '/lib/countries.js']);
 
 async function staticFile(url, res) {
   if (BROWSER_LIB.has(url.pathname)) {

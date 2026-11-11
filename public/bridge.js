@@ -1,5 +1,5 @@
-// Page side of the Apple bridge (see apple-bridge.user.js). Apple only answers
-// availability requests that come from a real browser, so when the userscript
+// Page side of the Apple bridge (see apple-bridge.user.js). Apple and AT&T only
+// answer stock requests that come from a real browser, so when the userscript
 // is installed we route those requests through it instead of the local server.
 
 const pending = new Map();
@@ -39,22 +39,22 @@ export function detectBridge(timeoutMs = 1000) {
   });
 }
 
-/** fetch()-like transport for lib/apple.js's fetchAvailability. */
-export function bridgeTransport(url) {
+/** fetch()-like transport for lib/apple.js and lib/att.js. `init` may set method, headers and a string body. */
+export function bridgeTransport(url, init = {}) {
   const id = `r${++seq}`;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error('The browser bridge did not answer. Is the userscript enabled?'));
-    }, 20000);
+    }, 30000);
     pending.set(id, (d) => {
       clearTimeout(timer);
       if (d.error) return reject(new Error(d.error));
-      if (!d.status) return reject(new Error('apple.com did not return a response.'));
+      if (!d.status) return reject(new Error(`${new URL(url).hostname} did not return a response.`));
       // Statuses that can't carry a body (204/304) would make Response() throw.
       const body = [101, 204, 205, 304].includes(d.status) ? null : d.body;
       resolve(new Response(body, { status: d.status, headers: { 'content-type': d.contentType || '' } }));
     });
-    post({ type: 'request', id, url });
+    post({ type: 'request', id, url, method: init.method || 'GET', headers: init.headers || {}, body: init.body ?? null });
   });
 }

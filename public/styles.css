@@ -117,6 +117,9 @@ th.store, td.store { text-align: left; position: sticky; left: 0; background: va
 td.store { min-width: 180px; }
 td.store .name { font-weight: 600; }
 td.store .meta { color: var(--muted); font-size: 12px; }
+.badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .02em; border-radius: 4px; padding: 1px 5px; margin-right: 6px; vertical-align: 1px; }
+.badge.att { background: #009fdb; color: #fff; }
+.status .note { margin-top: 6px; font-size: 13px; color: var(--warn); }
 th.cfg { font-weight: 500; line-height: 1.25; }
 th.cfg .color { display: block; font-weight: 600; }
 th.cfg .cap, th.cfg .car { display: block; color: var(--muted); font-size: 12px; }

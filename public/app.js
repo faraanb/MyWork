@@ -1,4 +1,5 @@
 import { fetchAvailability } from '/lib/apple.js';
+import { fetchAttAvailability, fetchAttMapping, attSlug, isZip } from '/lib/att.js';
 import { detectBridge, bridgeTransport, bridgeMarker } from './bridge.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -16,6 +17,7 @@ const els = {
   mode: $('#mode'),
   status: $('#status'),
   results: $('#results'),
+  retailers: $('#f-retailer'),
 };
 const FILTERS = { color: '#f-color', capacity: '#f-capacity', carrier: '#f-carrier' };
 const DEMO = new URLSearchParams(location.search).get('demo') === '1';
@@ -39,7 +41,11 @@ const state = {
   busy: false,
   bridge: null, // { version } when the Apple bridge userscript is installed
   recent: null, // { key, at, stores } — avoid re-asking Apple within 30 s
+  retailers: new Set(['apple']), // which store chains to search: 'apple', 'att'
+  attMaps: new Map(), // AT&T slug -> Map(Apple part -> AT&T billCode)
 };
+const RETAILER_NAMES = { apple: 'Apple', att: 'AT&T' };
+const ATT_BRIDGE_MIN = [1, 1];
 const RECENT_MS = 30000;
 
 // ---------- persistence ----------
@@ -56,6 +62,7 @@ function saveSettings() {
     interval: els.interval.value,
     onlyAvail: els.onlyAvail.checked,
     ntfy: els.ntfy.value.trim(),
+    retailers: [...state.retailers],
     selected: Object.fromEntries(Object.entries(state.selected).map(([k, v]) => [k, [...v]])),
   });
 }
@@ -147,20 +154,22 @@ async function check() {
   const loc = els.location.value.trim();
   if (!loc) return setStatus('Enter a postal code or city to search near.', 'warn');
   if (!configs.length) return setStatus('Select at least one finish, storage size and carrier.', 'warn');
+  const retailers = activeRetailers();
+  if (!retailers.length) return setStatus('Select at least one kind of store to search.', 'warn');
 
   const parts = [...new Set(configs.map((c) => c.partNumber))];
   state.busy = true;
   els.check.disabled = true;
   setStatus(`Checking ${parts.length} configuration${parts.length === 1 ? '' : 's'} near ${esc(loc)}…`);
   try {
-    const result = await getAvailability(els.country.value, loc, parts);
+    const result = await getAvailability(els.country.value, loc, parts, currentModel(), retailers);
     const fresh = diffNew(result);
     state.lastResult = { ...result, configs, fresh };
     render();
     if (fresh.size && state.previouslyAvailable !== null) alertNew(result, fresh, configs);
     state.previouslyAvailable = availableKeys(result);
   } catch (err) {
-    if (err.code === 'apple_blocked') showBlocked(err.message);
+    if (['apple_blocked', 'att_blocked', 'att_needs_bridge', 'att_old_bridge'].includes(err.code)) showBlocked(err.message, err.code);
     else setStatus(esc(err.message), 'error');
   } finally {
     state.busy = false;
@@ -169,7 +178,37 @@ async function check() {
   }
 }
 
-async function getAvailability(country, location, parts) {
+function activeRetailers() {
+  // AT&T stores only exist in the US.
+  return [...state.retailers].filter((r) => r !== 'att' || els.country.value === 'us');
+}
+
+/**
+ * Checks each selected store chain and merges their stores. One chain failing
+ * doesn't hide the other's results; its error is shown as a note instead.
+ */
+async function getAvailability(country, location, parts, model, retailers) {
+  const errors = [];
+  let stores = [];
+  let via = 'server';
+  for (const retailer of retailers) {
+    try {
+      const r = retailer === 'att' ? await getAttAvailability(location, parts, model) : await getAppleAvailability(country, location, parts);
+      stores = stores.concat(r.stores);
+      if (r.via === 'browser') via = 'browser';
+    } catch (err) {
+      errors.push({ retailer, message: err.message, code: err.code });
+    }
+  }
+  if (errors.length === retailers.length) {
+    const err = errors.find((e) => e.code === 'apple_blocked') || errors[0];
+    throw Object.assign(new Error(retailers.length > 1 ? errors.map((e) => `${RETAILER_NAMES[e.retailer]}: ${e.message}`).join(' ') : err.message), { code: err.code });
+  }
+  stores.sort((a, b) => a.distanceValue - b.distanceValue);
+  return { country, location, demo: DEMO, via, checkedAt: new Date().toISOString(), stores, errors, retailers };
+}
+
+async function getAppleAvailability(country, location, parts) {
   if (DEMO) {
     return api('/api/availability', { country, location, parts: parts.join(','), demo: '1' });
   }
@@ -189,7 +228,35 @@ async function getAvailability(country, location, parts) {
     stores = await fetchAvailability(country, location, parts, { transport: bridgeTransport });
     state.recent = { key, at: Date.now(), stores };
   }
-  return { country, location, demo: false, via: 'browser', checkedAt: new Date().toISOString(), stores };
+  return { stores, via: 'browser' };
+}
+
+async function getAttAvailability(location, parts, model) {
+  if (!isZip(location)) throw Object.assign(new Error('AT&T stores need a 5-digit ZIP code.'), { code: 'att_zip' });
+  if (DEMO) {
+    return api('/api/availability', { country: 'us', location, parts: parts.join(','), demo: '1', retailer: 'att' });
+  }
+  if (!state.bridge) {
+    state.bridge = await detectBridge(500);
+    renderMode();
+  }
+  if (!state.bridge) throw Object.assign(new Error('AT&T stores need the browser bridge userscript.'), { code: 'att_needs_bridge' });
+  if (!bridgeAtLeast(state.bridge.version, ATT_BRIDGE_MIN)) {
+    throw Object.assign(new Error(`AT&T stores need bridge v${ATT_BRIDGE_MIN.join('.')} or newer (you have v${state.bridge.version}). Update the userscript, then reload.`), { code: 'att_old_bridge' });
+  }
+  const slug = attSlug(model.name);
+  let mapping = state.attMaps.get(slug);
+  if (!mapping) {
+    mapping = await fetchAttMapping(slug, { transport: bridgeTransport });
+    state.attMaps.set(slug, mapping);
+  }
+  if (!parts.some((pn) => mapping.has(pn))) throw new Error(`AT&T doesn't list ${model.name} in the selected configurations.`);
+  return { stores: await fetchAttAvailability(location, parts, slug, { transport: bridgeTransport, mapping }), via: 'browser' };
+}
+
+function bridgeAtLeast(version, [major, minor]) {
+  const [a = 0, b = 0] = String(version).split('.').map(Number);
+  return a > major || (a === major && b >= minor);
 }
 
 const INSTALL_STEPS = `
@@ -198,10 +265,17 @@ const INSTALL_STEPS = `
   <li>Open the <a href="/apple-bridge.user.js" target="_blank">Apple bridge userscript</a> and click <b>Install</b> (or <b>Update</b>).</li>
   <li>Reload this page. The line under the form should say <b>Browser mode</b>.</li>`;
 
-function showBlocked(message) {
+function showBlocked(message, code) {
   const marker = bridgeMarker();
   let help;
-  if (state.bridge) {
+  if (code === 'att_old_bridge') {
+    help = `<ol>${INSTALL_STEPS}</ol>`;
+  } else if (code === 'att_blocked') {
+    help = `<p>The browser bridge is working, but AT&T refused.</p><ol>
+        <li>Open <a href="https://www.att.com/buy/phones/" target="_blank" rel="noopener">att.com/buy/phones</a> in this browser, browse a page or two, then try again.</li>
+        <li>If it keeps happening, use a slower auto-refresh interval.</li>
+      </ol>`;
+  } else if (state.bridge) {
     help = `<p>The browser bridge is working, but Apple still refused.</p><ol>
         <li>Open <a href="https://www.apple.com/shop/buy-iphone" target="_blank" rel="noopener">apple.com/shop/buy-iphone</a> in this browser, browse a page or two, then try again.</li>
         <li>If it keeps happening, use a slower auto-refresh interval. Apple may be rate-limiting you.</li>
@@ -259,11 +333,13 @@ function render() {
       <strong class="${availCount ? 'good' : ''}">${availCount ? `${availCount} of ${configs.length} configurations in stock` : 'Nothing in stock right now'}</strong>
       <span>${storesWithStock.length} of ${r.stores.length} nearby stores have stock</span>
       <span>Checked ${time}${r.demo ? ' · <b>demo data</b>' : ''}</span>
-    </div>`,
+    </div>${(r.errors || []).map((e) => `<div class="note">${esc(RETAILER_NAMES[e.retailer])} stores couldn’t be checked: ${esc(e.message)}</div>`).join('')}`,
   );
 
   if (!r.stores.length) {
-    els.results.innerHTML = '<div class="empty panel">Apple didn’t return any stores near that location. Try a different postal code.</div>';
+    els.results.innerHTML = r.retailers?.length === 1 && r.retailers[0] === 'att'
+      ? '<div class="empty panel">No AT&amp;T store near that ZIP code has the selected configurations in stock right now.</div>'
+      : '<div class="empty panel">No stores came back for that location. Try a different postal code.</div>';
     return;
   }
   if (!stores.length) {
@@ -288,13 +364,14 @@ function render() {
           const a = s.availability[c.partNumber];
           if (a?.available) {
             const isNew = r.fresh.has(`${s.storeNumber}|${c.partNumber}`);
-            return `<td class="cell yes${isNew ? ' new' : ''}"><a href="${esc(c.url)}" target="_blank" rel="noopener" title="${esc(a.quote)}">${esc(shortQuote(a.quote))}</a></td>`;
+            return `<td class="cell yes${isNew ? ' new' : ''}"><a href="${esc(a.url || c.url)}" target="_blank" rel="noopener" title="${esc(a.quote)}">${esc(shortQuote(a.quote))}</a></td>`;
           }
           return `<td class="cell no"><span title="${esc(a?.quote || 'Not offered at this store')}">—</span></td>`;
         })
         .join('');
       const place = [s.city, s.state].filter(Boolean).join(', ');
-      return `<tr><td class="store"><div class="name">${esc(s.name)}</div><div class="meta">${esc([place, s.distance].filter(Boolean).join(' · '))}</div></td>${cells}</tr>`;
+      const badge = s.retailer === 'att' ? '<span class="badge att">AT&amp;T</span>' : '';
+      return `<tr><td class="store"><div class="name">${badge}${esc(s.name)}</div><div class="meta">${esc([place, s.distance].filter(Boolean).join(' · '))}</div></td>${cells}</tr>`;
     })
     .join('');
 
@@ -303,6 +380,8 @@ function render() {
 
 function shortQuote(q) {
   if (!q) return 'In stock';
+  const left = /(\d+) left/i.exec(q);
+  if (left) return `${left[1]} left`;
   const m = /today|tomorrow|\b(mon|tue|wed|thu|fri|sat|sun)\w*/i.exec(q);
   return m ? m[0][0].toUpperCase() + m[0].slice(1).toLowerCase() : 'In stock';
 }
@@ -332,7 +411,8 @@ function alertNew(result, fresh, configs) {
     const [storeNum, pn] = k.split('|');
     const s = result.stores.find((x) => x.storeNumber === storeNum);
     const c = byPart[pn];
-    return `${c ? `${c.color} ${c.capacity}` : pn} @ ${s?.name ?? storeNum}`;
+    const where = s ? `${s.retailer === 'att' ? 'AT&T ' : ''}${s.name}` : storeNum;
+    return `${c ? `${c.color} ${c.capacity}` : pn} @ ${where}`;
   });
   if (els.notify.checked && 'Notification' in window && Notification.permission === 'granted') {
     const n = new Notification(`${currentModel()?.name ?? 'iPhone'} in stock!`, { body: lines.join('\n'), tag: 'isc' });
@@ -384,6 +464,15 @@ els.form.addEventListener('submit', (e) => {
 els.form.addEventListener('click', (e) => {
   const chip = e.target.closest('.chip');
   if (!chip) return;
+  if (chip.dataset.retailer) {
+    const r = chip.dataset.retailer;
+    if (state.retailers.has(r)) state.retailers.delete(r);
+    else state.retailers.add(r);
+    renderRetailers();
+    saveSettings();
+    resetResults();
+    return;
+  }
   const { dim, value } = chip.dataset;
   const set = state.selected[dim];
   if (set.has(value)) set.delete(value);
@@ -393,7 +482,13 @@ els.form.addEventListener('click', (e) => {
   resetResults();
 });
 
+function renderRetailers() {
+  els.retailers.hidden = els.country.value !== 'us';
+  for (const chip of els.retailers.querySelectorAll('.chip')) chip.setAttribute('aria-pressed', state.retailers.has(chip.dataset.retailer));
+}
+
 els.country.addEventListener('change', () => {
+  renderRetailers();
   const c = state.countries.find((x) => x.code === els.country.value);
   els.location.placeholder = c?.postal || '';
   els.location.value = '';
@@ -436,6 +531,8 @@ window.addEventListener('focus', () => { document.title = 'iPhone Stock Checker'
   if (saved.interval) els.interval.value = saved.interval;
   els.onlyAvail.checked = !!saved.onlyAvail;
   if (saved.ntfy) els.ntfy.value = saved.ntfy;
+  if (Array.isArray(saved.retailers) && saved.retailers.length) state.retailers = new Set(saved.retailers.filter((r) => r in RETAILER_NAMES));
+  renderRetailers();
   state.bridge = DEMO ? null : await detectBridge();
   renderMode();
   await loadCatalog(saved);

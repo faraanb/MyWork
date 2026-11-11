@@ -54,15 +54,25 @@ The userscript ([`public/apple-bridge.user.js`](public/apple-bridge.user.js)) ru
 
 To get phone alerts while the tab is open, put an [ntfy](https://ntfy.sh) topic in the *Phone alerts* field.
 
+## AT&T stores (US)
+
+Turn on **AT&T** under *Stores* to also search AT&T stores near a 5-digit ZIP code. AT&T stores show up in the same table with an AT&T badge, sorted by distance alongside Apple Stores.
+
+- AT&T checks need the bridge userscript **v1.1.0 or newer**, because att.com only answers real browsers. Reinstall it from <http://localhost:3000/apple-bridge.user.js> if the page says your bridge is too old.
+- AT&T only lists stores that have at least one of the selected configurations in stock, so stores with nothing don't appear.
+- If AT&T refuses, open att.com/buy/phones once in the same browser and use a slower refresh.
+- The server never contacts att.com itself; demo mode (`npm run demo`) includes made-up AT&T stores.
+
 ## How it works
 
 | Piece | What it does |
 | --- | --- |
 | `lib/apple.js` → `fetchCatalog` | Reads `/{cc}/shop/buy-iphone` to find the current model pages. It then parses the `PRODUCT_SELECTION_BOOTSTRAP.productSelectionData` JSON embedded in each page into `{partNumber, model, color, capacity, carrier, url}` entries (cached 6 h). |
 | `lib/apple.js` → `fetchAvailability` | Calls `/{cc}/shop/fulfillment-messages?pl=true&location=…&parts.N=…` in batches of 8 part numbers. It merges the stores and normalises each part to `{available, status, quote}`. |
+| `lib/att.js` | AT&T stores. Reads the `__NEXT_DATA__` on `att.com/buy/phones/apple-{slug}.html` to map Apple part numbers to AT&T billCodes, then POSTs them to `/msapi/sales/uis/v1/inventory/storeavailability?zipCode=…` and normalises the stores to the same shape as Apple's. |
 | `server.js` | Static file server plus a JSON API (`/api/countries`, `/api/catalog`, `/api/availability`). Browsers can't call apple.com directly because of CORS. |
 | `watch.js`, `lib/filter.js`, `lib/notify.js` | The terminal watcher: loose model/option matching, change detection, ntfy and webhook delivery. |
-| `public/apple-bridge.user.js`, `public/bridge.js` | Browser bridge. The page posts availability URLs to the userscript, which fetches them from your browser with `GM.xmlHttpRequest`. The page then parses the response with the same `lib/apple.js` code the server uses. |
+| `public/apple-bridge.user.js`, `public/bridge.js` | Browser bridge. The page posts availability requests to the userscript, which sends them from your browser with `GM.xmlHttpRequest`. It only forwards Apple pickup availability, AT&T iPhone pages and AT&T store availability. The page then parses the response with the same `lib/apple.js` / `lib/att.js` code. |
 | `public/` | The UI: filters, results grid, auto-refresh, notifications. Settings are remembered in `localStorage`. |
 
 Not affiliated with Apple. These are undocumented Apple Store endpoints, so they can change without notice.

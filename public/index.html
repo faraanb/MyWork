@@ -12,7 +12,7 @@
   <header class="top">
     <div class="wrap">
       <h1>iPhone Stock Checker</h1>
-      <p class="sub">Live in-store pickup availability from the Apple Store, updated automatically.</p>
+      <p class="sub">Live in-store pickup availability from Apple Stores and AT&amp;T stores, updated automatically.</p>
     </div>
   </header>
 
@@ -34,6 +34,10 @@
         <fieldset id="f-color"><legend>Finish</legend><div class="chips"></div></fieldset>
         <fieldset id="f-capacity"><legend>Storage</legend><div class="chips"></div></fieldset>
         <fieldset id="f-carrier"><legend>Carrier</legend><div class="chips"></div></fieldset>
+        <fieldset id="f-retailer"><legend>Stores</legend><div class="chips">
+          <button type="button" class="chip" data-retailer="apple" aria-pressed="true">Apple Store</button>
+          <button type="button" class="chip" data-retailer="att" aria-pressed="false">AT&amp;T</button>
+        </div></fieldset>
       </div>
 
       <div class="row actions">
@@ -64,7 +68,7 @@
   </main>
 
   <footer class="wrap foot">
-    Not affiliated with Apple. Data comes from the public Apple Store website and can lag a few minutes behind real stock.
+    Not affiliated with Apple or AT&amp;T. Data comes from the public Apple Store and AT&amp;T websites and can lag a few minutes behind real stock.
   </footer>
 
   <script type="module" src="app.js"></script>
