@@ -1,5 +1,5 @@
 import { fetchAvailability } from '/lib/apple.js';
-import { detectBridge, bridgeTransport } from './bridge.js';
+import { detectBridge, bridgeTransport, bridgeMarker } from './bridge.js';
 
 const $ = (sel) => document.querySelector(sel);
 const els = {
@@ -174,6 +174,10 @@ async function getAvailability(country, location, parts) {
     return api('/api/availability', { country, location, parts: parts.join(','), demo: '1' });
   }
   if (!state.bridge) {
+    state.bridge = await detectBridge(500);
+    renderMode();
+  }
+  if (!state.bridge) {
     return { ...(await api('/api/availability', { country, location, parts: parts.join(',') })), via: 'server' };
   }
   // Browser mode: ask Apple from this browser via the userscript.
@@ -188,18 +192,26 @@ async function getAvailability(country, location, parts) {
   return { country, location, demo: false, via: 'browser', checkedAt: new Date().toISOString(), stores };
 }
 
+const INSTALL_STEPS = `
+  <li>Install <a href="https://www.tampermonkey.net" target="_blank" rel="noopener">Tampermonkey</a> or <a href="https://violentmonkey.github.io" target="_blank" rel="noopener">Violentmonkey</a>.</li>
+  <li><b>Chrome, Edge or Brave:</b> open the extensions page (<code>chrome://extensions</code>), click <i>Details</i> on Tampermonkey, and turn on <b>Allow User Scripts</b>. On older versions, turn on <b>Developer mode</b> at the top right instead. Without this, Chrome silently skips every userscript.</li>
+  <li>Open the <a href="/apple-bridge.user.js" target="_blank">Apple bridge userscript</a> and click <b>Install</b> (or <b>Update</b>).</li>
+  <li>Reload this page. The line under the form should say <b>Browser mode</b>.</li>`;
+
 function showBlocked(message) {
-  const steps = state.bridge
-    ? `<ol>
-        <li>Open <a href="https://www.apple.com/shop/buy-iphone" target="_blank" rel="noopener">apple.com/shop/buy-iphone</a> in this browser and browse a page or two, then try again.</li>
+  const marker = bridgeMarker();
+  let help;
+  if (state.bridge) {
+    help = `<p>The browser bridge is working, but Apple still refused.</p><ol>
+        <li>Open <a href="https://www.apple.com/shop/buy-iphone" target="_blank" rel="noopener">apple.com/shop/buy-iphone</a> in this browser, browse a page or two, then try again.</li>
         <li>If it keeps happening, use a slower auto-refresh interval. Apple may be rate-limiting you.</li>
-      </ol>`
-    : `<ol>
-        <li>Install a userscript manager: <a href="https://www.tampermonkey.net" target="_blank" rel="noopener">Tampermonkey</a> or <a href="https://violentmonkey.github.io" target="_blank" rel="noopener">Violentmonkey</a>.</li>
-        <li>Install the <a href="/apple-bridge.user.js" target="_blank">Apple bridge userscript</a>. It sends availability requests from your browser instead of this server.</li>
-        <li>Reload this page and check again.</li>
       </ol>`;
-  setStatus(`<b>${esc(message)}</b>${steps}`, 'error');
+  } else if (marker) {
+    help = `<p>The Apple bridge userscript (v${esc(marker)}) is installed on this page but isn't answering. Update it to the latest version and reload:</p><ol>${INSTALL_STEPS}</ol>`;
+  } else {
+    help = `<p>The Apple bridge userscript isn't running on this page, so the request went through the local server instead.</p><ol>${INSTALL_STEPS}</ol>`;
+  }
+  setStatus(`<b>${esc(message)}</b>${help}`, 'error');
 }
 
 function renderMode() {
@@ -211,7 +223,10 @@ function renderMode() {
     els.mode.innerHTML = `<span class="dot"></span>Browser mode: stock requests go through your browser (Apple bridge v${esc(state.bridge.version)}).`;
   } else {
     els.mode.className = 'mode';
-    els.mode.innerHTML = '<span class="dot"></span>Apple only answers stock requests from a real browser. <a href="/apple-bridge.user.js" target="_blank">Install the Apple bridge userscript</a> (needs Tampermonkey or Violentmonkey), then reload.';
+    const marker = bridgeMarker();
+    els.mode.innerHTML = marker
+      ? `<span class="dot"></span>Apple bridge v${esc(marker)} is installed but not answering. <a href="/apple-bridge.user.js" target="_blank">Update it</a>, then reload.`
+      : '<span class="dot"></span>Browser bridge not detected. Apple only answers stock requests from a real browser. <a href="/apple-bridge.user.js" target="_blank">Install the Apple bridge userscript</a> (needs Tampermonkey or Violentmonkey; on Chrome also turn on <i>Allow User Scripts</i>), then reload.';
   }
 }
 

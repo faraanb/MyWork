@@ -8,7 +8,7 @@ let info = null; // { version } once the userscript has answered
 const waiters = new Set();
 
 window.addEventListener('message', (event) => {
-  if (event.source !== window || event.origin !== window.location.origin) return;
+  if (event.origin !== window.location.origin) return;
   const d = event.data;
   if (!d || d.source !== 'isc-bridge') return;
   if (d.type === 'pong') {
@@ -23,7 +23,12 @@ window.addEventListener('message', (event) => {
 
 const post = (msg) => window.postMessage({ source: 'isc-page', ...msg }, window.location.origin);
 
-/** Resolves to { version } if the userscript is installed, otherwise null. */
+/** Version the userscript stamped on <html>, if it ran at all on this page. */
+export function bridgeMarker() {
+  return document.documentElement.getAttribute('data-isc-bridge');
+}
+
+/** Resolves to { version } if the userscript answers, otherwise null. */
 export function detectBridge(timeoutMs = 1000) {
   if (info) return Promise.resolve(info);
   return new Promise((resolve) => {

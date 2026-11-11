@@ -39,8 +39,16 @@ Names are matched loosely (`"18 pro"`, `Silver`, `256gb`). The carrier defaults 
 Apple's availability endpoint only answers requests from a real web browser. It answers anything else with **HTTP 541**, even from a home connection. The product catalog still loads from the server, but stock checks have to come from your browser:
 
 1. Install a userscript manager: [Tampermonkey](https://www.tampermonkey.net) or [Violentmonkey](https://violentmonkey.github.io).
+   **Chrome, Edge or Brave:** open `chrome://extensions`, click *Details* on the extension, and turn on **Allow User Scripts**. On older versions, turn on **Developer mode** instead. Without this, Chrome silently runs no userscripts at all.
 2. With the app running, open <http://localhost:3000/apple-bridge.user.js> and click **Install**.
 3. Reload the app. The line under the form should say **Browser mode**.
+
+**Still seeing "Browser bridge not detected"?**
+- Check that the userscript is listed and enabled in the extension's dashboard.
+- Check that the Chrome *Allow User Scripts* / *Developer mode* switch from step 1 is on.
+- Reload the page.
+
+If the page says the bridge is "installed but not answering", reinstall the latest script from the same URL.
 
 The userscript ([`public/apple-bridge.user.js`](public/apple-bridge.user.js)) runs only on `localhost`/`127.0.0.1`, and it only forwards `www.apple.com/…/shop/fulfillment-messages` URLs. Those requests then go out from your browser, the same as if you had opened the Apple Store yourself. If Apple still refuses, visit apple.com/shop/buy-iphone once in the same browser and use a slower refresh. Results are cached for 30 s, so repeated clicks don't hit Apple again.
 

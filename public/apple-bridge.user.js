@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iPhone Stock Checker – Apple bridge
 // @namespace    iphone-stock-checker
-// @version      1.0.0
+// @version      1.0.1
 // @description  Lets the local iPhone Stock Checker page ask Apple for pickup availability from your own browser.
 // @match        http://localhost/*
 // @match        http://127.0.0.1/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.0.1';
   const ALLOWED = /^https:\/\/www\.apple\.com\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?shop\/fulfillment-messages\?/;
   const gmRequest =
     (typeof GM !== 'undefined' && GM.xmlHttpRequest) ||
@@ -33,8 +33,16 @@
     window.postMessage({ source: 'isc-bridge', version: VERSION, ...msg }, window.location.origin);
   }
 
+  // Mark the page so it can tell "installed" apart from "not answering",
+  // without relying on messaging. The DOM is shared with the page.
+  // At document-start <html> may not exist yet, so retry once the DOM is ready.
+  const mark = () => document.documentElement?.setAttribute('data-isc-bridge', VERSION);
+  mark();
+
+  // Note: no `event.source === window` check. Userscript managers run this in a
+  // sandbox where `window` is a wrapper, so that comparison is always false.
   window.addEventListener('message', (event) => {
-    if (event.source !== window || event.origin !== window.location.origin) return;
+    if (event.origin !== window.location.origin) return;
     const data = event.data;
     if (!data || data.source !== 'isc-page' || !isCheckerPage()) return;
 
@@ -61,5 +69,8 @@
   });
 
   // Announce ourselves in case the page loaded first.
-  window.addEventListener('DOMContentLoaded', () => isCheckerPage() && reply({ type: 'pong' }));
+  window.addEventListener('DOMContentLoaded', () => {
+    mark();
+    if (isCheckerPage()) reply({ type: 'pong' });
+  });
 })();
