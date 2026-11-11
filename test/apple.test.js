@@ -75,3 +75,17 @@ test('parseProductPage infers capacity for single-size models', () => {
   assert.equal(c.capacityKey, '128gb');
   assert.equal(c.carrier, 'AT&T');
 });
+
+test('parseProductPage drops the localized screen size from the model name', () => {
+  const sizes = {
+    '6_3inch': 'iPhone&nbsp;18&nbsp;Pro\n<span class="form-label-small">Écran de 6,3&nbsp;pouces<as-footnote><sup>2</sup></as-footnote></span>',
+    '6_9inch': 'iPhone&nbsp;18&nbsp;Pro&nbsp;Max\n<span class="form-label-small">6.9インチディスプレイ</span>',
+  };
+  const data = {
+    displayValues: { dimensionScreensize: Object.fromEntries(Object.entries(sizes).map(([k, value]) => [k, { value }])) },
+    products: Object.keys(sizes).map((k, i) => ({ partNumber: `MX${i}A3J/A`, dimensionScreensize: k, dimensionCapacity: '256gb' })),
+  };
+  const html = `productSelectionData: ${JSON.stringify(data)};`;
+  const models = parseProductPage(html, 'iphone-18-pro', 'https://www.apple.com/fr').map((c) => c.model);
+  assert.deepEqual(models, ['iPhone 18 Pro', 'iPhone 18 Pro Max']);
+});
