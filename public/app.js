@@ -511,7 +511,7 @@ async function sendNtfy(title, body, url) {
   const topic = els.ntfy.value.trim();
   if (!topic) return 'No ntfy topic set.';
   const endpoint = /^https?:\/\//.test(topic) ? topic : `https://ntfy.sh/${encodeURIComponent(topic)}`;
-  const headers = { Title: title, Tags: 'iphone', Priority: 'high' };
+  const headers = { Title: title, Tags: 'iphone,rotating_light', Priority: 'urgent' };
   if (url) headers.Click = url;
   let error = null;
   try {
