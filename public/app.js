@@ -48,6 +48,7 @@ const state = {
   timer: null,
   nextAt: null, // when the next auto-refresh check is due (ms)
   busy: false,
+  blocked: 0, // consecutive checks Apple refused (HTTP 541); auto-refresh backs off while > 0
   bridge: null, // { version } when the Apple bridge userscript is installed
   recent: null, // { key, at, stores } — avoid re-asking Apple within 30 s
   retailers: new Set(['apple']), // which store chains to search: 'apple', 'att'
@@ -202,7 +203,13 @@ async function check() {
     renderHistory();
     if (fresh.size) alertNew(result, fresh, configs);
     state.previouslyAvailable = availableKeys(result);
+    if (state.blocked && !all.errors.some((e) => e.code === 'apple_blocked')) {
+      state.blocked = 0;
+      if (els.auto.checked) sendNtfy('Watch resumed', 'Apple is answering again, checking at the normal interval.', null, 'low');
+    }
+    if (all.errors.some((e) => e.code === 'apple_blocked')) noteBlocked();
   } catch (err) {
+    if (err.code === 'apple_blocked') noteBlocked();
     if (['apple_blocked', 'att_blocked', 'att_needs_bridge', 'att_old_bridge'].includes(err.code)) showBlocked(err.message, err.code);
     else setStatus(esc(err.message), 'error');
   } finally {
@@ -507,11 +514,11 @@ function firstUrl(fresh, byPart) {
 }
 
 /** Posts to the ntfy topic. Resolves to null on success or an error message. */
-async function sendNtfy(title, body, url) {
+async function sendNtfy(title, body, url, priority = 'urgent') {
   const topic = els.ntfy.value.trim();
   if (!topic) return 'No ntfy topic set.';
   const endpoint = /^https?:\/\//.test(topic) ? topic : `https://ntfy.sh/${encodeURIComponent(topic)}`;
-  const headers = { Title: title, Tags: 'iphone,rotating_light', Priority: 'urgent' };
+  const headers = { Title: title, Tags: priority === 'urgent' ? 'iphone,rotating_light' : 'iphone', Priority: priority };
   if (url) headers.Click = url;
   let error = null;
   try {
@@ -543,12 +550,29 @@ function renderRadiusUnit() {
 // ---------- auto refresh ----------
 // Keeps going after a failed check (it just tries again next time), so one
 // refused request or network blip doesn't stop the watch.
+// Apple answers HTTP 541 to every request from a network it thinks is a bot,
+// and keeps doing so for longer if the requests continue. So while it's
+// refusing, wait twice as long before each retry (up to 30 min).
+const MAX_BACKOFF_MS = 30 * 60000;
+
+function noteBlocked() {
+  state.blocked++;
+  if (state.blocked === 1 && els.auto.checked) {
+    sendNtfy('Watch paused', 'Apple is refusing stock requests from this network (HTTP 541). Retrying less often until it answers again.', null, 'low');
+  }
+}
+
+function nextDelay() {
+  const ms = Number(els.interval.value) * 1000;
+  return state.blocked ? Math.min(ms * 2 ** state.blocked, Math.max(MAX_BACKOFF_MS, ms)) : ms;
+}
+
 function schedule() {
   clearTimeout(state.timer);
   state.timer = null;
   state.nextAt = null;
   if (els.auto.checked) {
-    const ms = Number(els.interval.value) * 1000;
+    const ms = nextDelay();
     state.nextAt = Date.now() + ms;
     state.timer = setTimeout(check, ms);
   }
@@ -556,7 +580,11 @@ function schedule() {
 }
 
 function renderNext() {
-  els.next.textContent = state.nextAt ? `Auto-refresh on · next check at ${new Date(state.nextAt).toLocaleTimeString()}` : '';
+  if (!state.nextAt) return void (els.next.textContent = '');
+  const at = new Date(state.nextAt).toLocaleTimeString();
+  els.next.textContent = state.blocked
+    ? `Apple is refusing requests, so checks are slowed down · next check at ${at}`
+    : `Auto-refresh on · next check at ${at}`;
 }
 
 // Browsers delay or freeze timers in background tabs. When the tab comes back
