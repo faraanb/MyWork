@@ -67,7 +67,11 @@
 
       <div class="row extras">
         <label class="grow"><span>Phone alerts via <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> (optional)</span>
-          <input id="ntfy" type="text" placeholder="Your ntfy topic, e.g. my-iphone-alerts-7f3k" spellcheck="false">
+          <span class="ntfy-row">
+            <input id="ntfy" type="text" placeholder="Your ntfy topic, e.g. my-iphone-alerts-7f3k" spellcheck="false">
+            <button type="button" id="ntfyTest" class="secondary">Send test</button>
+          </span>
+          <span id="ntfyStatus" class="ntfy-status" aria-live="polite"></span>
         </label>
       </div>
       <div id="mode" class="mode"></div>

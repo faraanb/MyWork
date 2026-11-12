@@ -16,6 +16,8 @@ const els = {
   onlyAvail: $('#onlyAvail'),
   radius: $('#radius'),
   ntfy: $('#ntfy'),
+  ntfyTest: $('#ntfyTest'),
+  ntfyStatus: $('#ntfyStatus'),
   mode: $('#mode'),
   status: $('#status'),
   results: $('#results'),
@@ -42,7 +44,7 @@ const state = {
   catalog: null,
   selected: { color: new Set(), capacity: new Set(), carrier: new Set() },
   lastResult: null,
-  previouslyAvailable: null, // Set of "store|part" from the previous check
+  previouslyAvailable: null, // Set of "store|part" already alerted on (null = nothing yet)
   timer: null,
   nextAt: null, // when the next auto-refresh check is due (ms)
   busy: false,
@@ -198,7 +200,7 @@ async function check() {
     state.lastResult = { ...result, configs, fresh };
     render();
     renderHistory();
-    if (fresh.size && state.previouslyAvailable !== null) alertNew(result, fresh, configs);
+    if (fresh.size) alertNew(result, fresh, configs);
     state.previouslyAvailable = availableKeys(result);
   } catch (err) {
     if (['apple_blocked', 'att_blocked', 'att_needs_bridge', 'att_old_bridge'].includes(err.code)) showBlocked(err.message, err.code);
@@ -346,8 +348,9 @@ function availableKeys(result) {
 
 function diffNew(result) {
   const now = availableKeys(result);
-  if (!state.previouslyAvailable) return new Set();
-  return new Set([...now].filter((k) => !state.previouslyAvailable.has(k)));
+  // The first check alerts on everything in stock; later checks only on what's new.
+  const before = state.previouslyAvailable || new Set();
+  return new Set([...now].filter((k) => !before.has(k)));
 }
 
 // ---------- rendering ----------
@@ -503,17 +506,23 @@ function firstUrl(fresh, byPart) {
   return byPart[pn]?.url;
 }
 
+/** Posts to the ntfy topic. Resolves to null on success or an error message. */
 async function sendNtfy(title, body, url) {
   const topic = els.ntfy.value.trim();
-  if (!topic) return;
+  if (!topic) return 'No ntfy topic set.';
   const endpoint = /^https?:\/\//.test(topic) ? topic : `https://ntfy.sh/${encodeURIComponent(topic)}`;
   const headers = { Title: title, Tags: 'iphone', Priority: 'high' };
   if (url) headers.Click = url;
+  let error = null;
   try {
-    await fetch(endpoint, { method: 'POST', headers, body });
+    const res = await fetch(endpoint, { method: 'POST', headers, body });
+    if (!res.ok) error = `ntfy answered HTTP ${res.status}.`;
   } catch (err) {
-    console.warn('ntfy failed', err);
+    error = `Could not reach ntfy (${err.message}).`;
   }
+  els.ntfyStatus.textContent = error ? `Phone alert failed: ${error}` : `Phone alert sent ${new Date().toLocaleTimeString()}.`;
+  els.ntfyStatus.className = `ntfy-status ${error ? 'bad' : 'ok'}`;
+  return error;
 }
 
 // ---------- distance limit ----------
@@ -619,6 +628,17 @@ els.model.addEventListener('change', () => {
 });
 els.location.addEventListener('change', () => { resetResults(); saveSettings(); });
 els.ntfy.addEventListener('change', saveSettings);
+els.ntfyTest.addEventListener('click', async () => {
+  saveSettings();
+  if (!els.ntfy.value.trim()) {
+    els.ntfyStatus.textContent = 'Enter your ntfy topic first.';
+    els.ntfyStatus.className = 'ntfy-status bad';
+    return;
+  }
+  els.ntfyTest.disabled = true;
+  await sendNtfy('Test alert', 'iPhone Stock Checker can reach your phone.');
+  els.ntfyTest.disabled = false;
+});
 els.onlyAvail.addEventListener('change', () => { saveSettings(); render(); });
 els.clearHistory.addEventListener('click', () => {
   if (!confirm('Clear the restock history this checker has collected?')) return;
