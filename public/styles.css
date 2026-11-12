@@ -54,7 +54,7 @@ h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; }
 .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
 .row > label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); min-width: 150px; }
 .row > label.grow { flex: 1 1 200px; }
-input[type=text], select {
+input[type=text], input[type=url], select {
   font: inherit;
   color: var(--text);
   background: var(--bg);

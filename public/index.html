@@ -73,6 +73,10 @@
           </span>
           <span id="ntfyStatus" class="ntfy-status" aria-live="polite"></span>
         </label>
+        <label class="grow"><span>“Checker is down” alert via <a href="https://healthchecks.io" target="_blank" rel="noopener">healthchecks.io</a> (optional)</span>
+          <input id="heartbeat" type="url" placeholder="Ping URL, e.g. https://hc-ping.com/your-check-id" spellcheck="false">
+          <span class="ntfy-status">Pinged after every successful check. If the pings stop, healthchecks.io alerts you.</span>
+        </label>
       </div>
       <div id="mode" class="mode"></div>
       <div id="next" class="mode" aria-live="polite"></div>

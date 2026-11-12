@@ -16,6 +16,7 @@ const els = {
   onlyAvail: $('#onlyAvail'),
   radius: $('#radius'),
   ntfy: $('#ntfy'),
+  heartbeat: $('#heartbeat'),
   ntfyTest: $('#ntfyTest'),
   ntfyStatus: $('#ntfyStatus'),
   mode: $('#mode'),
@@ -74,6 +75,7 @@ function saveSettings() {
     onlyAvail: els.onlyAvail.checked,
     radius: els.radius.value,
     ntfy: els.ntfy.value.trim(),
+    heartbeat: els.heartbeat.value.trim(),
     retailers: [...state.retailers],
     selected: Object.fromEntries(Object.entries(state.selected).map(([k, v]) => [k, [...v]])),
   });
@@ -208,6 +210,7 @@ async function check() {
       if (els.auto.checked) sendNtfy('Watch resumed', 'Apple is answering again, checking at the normal interval.', null, 'low');
     }
     if (all.errors.some((e) => e.code === 'apple_blocked')) noteBlocked();
+    else pingHeartbeat();
   } catch (err) {
     if (err.code === 'apple_blocked') noteBlocked();
     if (['apple_blocked', 'att_blocked', 'att_needs_bridge', 'att_old_bridge'].includes(err.code)) showBlocked(err.message, err.code);
@@ -550,6 +553,16 @@ function renderRadiusUnit() {
 // ---------- auto refresh ----------
 // Keeps going after a failed check (it just tries again next time), so one
 // refused request or network blip doesn't stop the watch.
+// Dead-man's switch: a page can't report that it has stopped (tab closed or
+// frozen, Mac asleep, server down, Apple blocking), so it pings an outside
+// monitor after every good check and that service raises the alarm when the
+// pings stop.
+function pingHeartbeat() {
+  const url = els.heartbeat.value.trim();
+  if (DEMO || !/^https:\/\//.test(url)) return;
+  fetch(url, { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
+}
+
 // Apple answers HTTP 541 to every request from a network it thinks is a bot,
 // and keeps doing so for longer if the requests continue. So while it's
 // refusing, wait twice as long before each retry (up to 30 min).
@@ -656,6 +669,7 @@ els.model.addEventListener('change', () => {
 });
 els.location.addEventListener('change', () => { resetResults(); saveSettings(); });
 els.ntfy.addEventListener('change', saveSettings);
+els.heartbeat.addEventListener('change', saveSettings);
 els.ntfyTest.addEventListener('click', async () => {
   saveSettings();
   if (!els.ntfy.value.trim()) {
@@ -712,6 +726,7 @@ window.addEventListener('focus', () => { document.title = 'iPhone Stock Checker'
   if (saved.radius && [...els.radius.options].some((o) => o.value === saved.radius)) els.radius.value = saved.radius;
   renderRadiusUnit();
   if (saved.ntfy) els.ntfy.value = saved.ntfy;
+  if (saved.heartbeat) els.heartbeat.value = saved.heartbeat;
   if (Array.isArray(saved.retailers) && saved.retailers.length) state.retailers = new Set(saved.retailers.filter((r) => r in RETAILER_NAMES));
   renderRetailers();
   state.bridge = DEMO ? null : await detectBridge();
