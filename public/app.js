@@ -1,5 +1,6 @@
 import { fetchAvailability } from '/lib/apple.js';
 import { fetchAttAvailability, fetchAttMapping, attSlug, isZip } from '/lib/att.js';
+import { emptyHistory, recordCheck, lastSeen, recentEvents, timeAgo, describeDuration } from '/lib/history.js';
 import { detectBridge, bridgeTransport, bridgeMarker } from './bridge.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -13,11 +14,16 @@ const els = {
   interval: $('#interval'),
   notify: $('#notify'),
   onlyAvail: $('#onlyAvail'),
+  radius: $('#radius'),
   ntfy: $('#ntfy'),
   mode: $('#mode'),
   status: $('#status'),
   results: $('#results'),
   retailers: $('#f-retailer'),
+  next: $('#next'),
+  history: $('#history'),
+  historyList: $('#historyList'),
+  clearHistory: $('#clearHistory'),
 };
 const FILTERS = { color: '#f-color', capacity: '#f-capacity', carrier: '#f-carrier' };
 const DEMO = new URLSearchParams(location.search).get('demo') === '1';
@@ -38,6 +44,7 @@ const state = {
   lastResult: null,
   previouslyAvailable: null, // Set of "store|part" from the previous check
   timer: null,
+  nextAt: null, // when the next auto-refresh check is due (ms)
   busy: false,
   bridge: null, // { version } when the Apple bridge userscript is installed
   recent: null, // { key, at, stores } — avoid re-asking Apple within 30 s
@@ -60,12 +67,28 @@ function saveSettings() {
     location: els.location.value,
     model: els.model.value,
     interval: els.interval.value,
+    auto: els.auto.checked,
     onlyAvail: els.onlyAvail.checked,
+    radius: els.radius.value,
     ntfy: els.ntfy.value.trim(),
     retailers: [...state.retailers],
     selected: Object.fromEntries(Object.entries(state.selected).map(([k, v]) => [k, [...v]])),
   });
 }
+
+// Restock history ("last seen"), kept separately for demo data so fake stock never mixes with real.
+const HISTORY_KEY = DEMO ? 'isc-history-demo' : 'isc-history';
+const history = {
+  data: emptyHistory(),
+  load() {
+    try {
+      const v = JSON.parse(localStorage.getItem(HISTORY_KEY) || 'null');
+      if (Array.isArray(v?.events)) this.data = v;
+    } catch {}
+  },
+  save() { try { localStorage.setItem(HISTORY_KEY, JSON.stringify(this.data)); } catch {} },
+};
+history.load();
 
 // ---------- api ----------
 async function api(path, params) {
@@ -140,6 +163,7 @@ async function loadCatalog(restore) {
     els.model.disabled = false;
     els.check.disabled = false;
     renderFilters(restore?.selected);
+    renderHistory();
     setStatus(`${models.length} models loaded. Enter your location and press <b>Check availability</b>.`);
   } catch (err) {
     els.model.innerHTML = '<option>Unavailable</option>';
@@ -162,10 +186,18 @@ async function check() {
   els.check.disabled = true;
   setStatus(`Checking ${parts.length} configuration${parts.length === 1 ? '' : 's'} near ${esc(loc)}…`);
   try {
-    const result = await getAvailability(els.country.value, loc, parts, currentModel(), retailers);
+    const all = await getAvailability(els.country.value, loc, parts, currentModel(), retailers);
+    // Stores beyond the chosen distance are dropped before diffing, so they never alert.
+    const result = { ...all, allStores: all.stores, stores: withinRadius(all.stores) };
+    // Track every returned store, not just those inside the distance limit, so
+    // widening the limit later still shows their history.
+    const intervalMs = Number(els.interval.value) * 1000;
+    recordCheck(history.data, all.stores, parts, Date.now(), { gapMs: Math.max(3 * intervalMs, 5 * 60000) });
+    history.save();
     const fresh = diffNew(result);
     state.lastResult = { ...result, configs, fresh };
     render();
+    renderHistory();
     if (fresh.size && state.previouslyAvailable !== null) alertNew(result, fresh, configs);
     state.previouslyAvailable = availableKeys(result);
   } catch (err) {
@@ -213,7 +245,9 @@ async function getAppleAvailability(country, location, parts) {
     return api('/api/availability', { country, location, parts: parts.join(','), demo: '1' });
   }
   if (!state.bridge) {
-    state.bridge = await detectBridge(500);
+    // If the userscript has marked the page it's installed, give it longer to
+    // wake up (e.g. right after the tab reloads) before falling back to the server.
+    state.bridge = await detectBridge(bridgeMarker() ? 5000 : 500);
     renderMode();
   }
   if (!state.bridge) {
@@ -237,7 +271,7 @@ async function getAttAvailability(location, parts, model) {
     return api('/api/availability', { country: 'us', location, parts: parts.join(','), demo: '1', retailer: 'att' });
   }
   if (!state.bridge) {
-    state.bridge = await detectBridge(500);
+    state.bridge = await detectBridge(bridgeMarker() ? 5000 : 500);
     renderMode();
   }
   if (!state.bridge) throw Object.assign(new Error('AT&T stores need the browser bridge userscript.'), { code: 'att_needs_bridge' });
@@ -331,11 +365,15 @@ function render() {
   setStatus(
     `<div class="summary">
       <strong class="${availCount ? 'good' : ''}">${availCount ? `${availCount} of ${configs.length} configurations in stock` : 'Nothing in stock right now'}</strong>
-      <span>${storesWithStock.length} of ${r.stores.length} nearby stores have stock</span>
+      <span>${storesWithStock.length} of ${r.stores.length} ${Number(els.radius.value) ? `stores within ${els.radius.value} ${distanceUnit()}` : 'nearby stores'} have stock</span>
       <span>Checked ${time}${r.demo ? ' · <b>demo data</b>' : ''}</span>
     </div>${(r.errors || []).map((e) => `<div class="note">${esc(RETAILER_NAMES[e.retailer])} stores couldn’t be checked: ${esc(e.message)}</div>`).join('')}`,
   );
 
+  if (!r.stores.length && r.allStores?.length) {
+    els.results.innerHTML = `<div class="empty panel">No stores within ${esc(els.radius.value)} ${distanceUnit()} of that location. The nearest is ${esc(r.allStores[0].distance)} away. Widen the distance to include it.</div>`;
+    return;
+  }
   if (!r.stores.length) {
     els.results.innerHTML = r.retailers?.length === 1 && r.retailers[0] === 'att'
       ? '<div class="empty panel">No AT&amp;T store near that ZIP code has the selected configurations in stock right now.</div>'
@@ -347,6 +385,7 @@ function render() {
     return;
   }
 
+  const now = Date.now();
   // Each column is a (part, carrier) config; carrier variants usually share one
   // part number and therefore share availability.
   const head = configs
@@ -366,16 +405,53 @@ function render() {
             const isNew = r.fresh.has(`${s.storeNumber}|${c.partNumber}`);
             return `<td class="cell yes${isNew ? ' new' : ''}"><a href="${esc(a.url || c.url)}" target="_blank" rel="noopener" title="${esc(a.quote)}">${esc(shortQuote(a.quote))}</a></td>`;
           }
-          return `<td class="cell no"><span title="${esc(a?.quote || 'Not offered at this store')}">—</span></td>`;
+          const seen = lastSeen(history.data, s.storeNumber, [c.partNumber]);
+          const tip = [a?.quote || 'Not offered at this store', seen && `Last in stock ${timeAgo(seen.last, now)} (${fmtTime(seen.last)})`].filter(Boolean).join('. ');
+          return `<td class="cell no"><span title="${esc(tip)}">—</span></td>`;
         })
         .join('');
       const place = [s.city, s.state].filter(Boolean).join(', ');
       const badge = s.retailer === 'att' ? '<span class="badge att">AT&amp;T</span>' : '';
-      return `<tr><td class="store"><div class="name">${badge}${esc(s.name)}</div><div class="meta">${esc([place, s.distance].filter(Boolean).join(' · '))}</div></td>${cells}</tr>`;
+      let seenLine = '';
+      if (!hasStock(s)) {
+        const seen = lastSeen(history.data, s.storeNumber, configs.map((c) => c.partNumber));
+        const c = seen && configs.find((x) => x.partNumber === seen.part);
+        if (seen) seenLine = `<div class="seen" title="${esc(fmtTime(seen.last))}">Last seen ${esc(timeAgo(seen.last, now))}${c ? ` · ${esc(c.color)} ${esc(c.capacity)}` : ''}</div>`;
+      }
+      return `<tr><td class="store"><div class="name">${badge}${esc(s.name)}</div><div class="meta">${esc([place, s.distance].filter(Boolean).join(' · '))}</div>${seenLine}</td>${cells}</tr>`;
     })
     .join('');
 
   els.results.innerHTML = `<div class="table-wrap"><table><thead><tr><th class="store">Store</th>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function fmtTime(ms) {
+  const d = new Date(ms);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+/** The "Recent restocks" list for the current model and selection. */
+function renderHistory() {
+  const configs = selectedConfigs();
+  if (!configs.length) {
+    els.history.hidden = true;
+    return;
+  }
+  els.history.hidden = false;
+  const byPart = Object.fromEntries(configs.map((c) => [c.partNumber, c]));
+  const events = recentEvents(history.data, Object.keys(byPart), { maxDistance: Number(els.radius.value) });
+  const now = Date.now();
+  const intervalMs = Number(els.interval.value) * 1000;
+  els.historyList.innerHTML = events.length
+    ? events
+        .map((ev) => {
+          const c = byPart[ev.part];
+          const where = `${ev.retailer === 'att' ? 'AT&T ' : ''}${ev.name}`;
+          return `<li class="${ev.open ? 'open' : ''}"><span class="when" title="${esc(timeAgo(ev.first, now))}">${esc(fmtTime(ev.first))}</span><span class="what">${esc(c ? `${c.color} ${c.capacity}` : ev.part)}</span><span>${esc(where)}</span><span class="muted">${esc(describeDuration(ev, intervalMs))}</span></li>`;
+        })
+        .join('')
+    : '<li class="empty-row">No restocks seen yet for this selection. This fills in as the checker runs.</li>';
 }
 
 function shortQuote(q) {
@@ -440,12 +516,48 @@ async function sendNtfy(title, body, url) {
   }
 }
 
+// ---------- distance limit ----------
+// Distances come back in the storefront's own unit (miles in the US and UK, km elsewhere).
+const distanceUnit = () => (['us', 'uk'].includes(els.country.value) ? 'mi' : 'km');
+
+function withinRadius(stores) {
+  const max = Number(els.radius.value);
+  // Keep stores whose distance is unknown rather than silently hiding them.
+  return max ? stores.filter((s) => !s.distanceValue || s.distanceValue <= max) : stores;
+}
+
+function renderRadiusUnit() {
+  const unit = distanceUnit();
+  for (const o of els.radius.options) if (o.value !== '0') o.textContent = `${o.value} ${unit}`;
+}
+
 // ---------- auto refresh ----------
+// Keeps going after a failed check (it just tries again next time), so one
+// refused request or network blip doesn't stop the watch.
 function schedule() {
   clearTimeout(state.timer);
   state.timer = null;
-  if (els.auto.checked && state.lastResult) state.timer = setTimeout(check, Number(els.interval.value) * 1000);
+  state.nextAt = null;
+  if (els.auto.checked) {
+    const ms = Number(els.interval.value) * 1000;
+    state.nextAt = Date.now() + ms;
+    state.timer = setTimeout(check, ms);
+  }
+  renderNext();
 }
+
+function renderNext() {
+  els.next.textContent = state.nextAt ? `Auto-refresh on · next check at ${new Date(state.nextAt).toLocaleTimeString()}` : '';
+}
+
+// Browsers delay or freeze timers in background tabs. When the tab comes back
+// (or the network does), run any check that's overdue straight away.
+function catchUp() {
+  if (els.auto.checked && !state.busy && state.nextAt && Date.now() > state.nextAt + 5000) check();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) catchUp(); });
+window.addEventListener('online', catchUp);
+window.addEventListener('pageshow', catchUp);
 
 // ---------- wiring ----------
 function resetResults() {
@@ -480,6 +592,7 @@ els.form.addEventListener('click', (e) => {
   chip.setAttribute('aria-pressed', set.has(value));
   saveSettings();
   resetResults();
+  renderHistory();
 });
 
 function renderRetailers() {
@@ -489,6 +602,7 @@ function renderRetailers() {
 
 els.country.addEventListener('change', () => {
   renderRetailers();
+  renderRadiusUnit();
   const c = state.countries.find((x) => x.code === els.country.value);
   els.location.placeholder = c?.postal || '';
   els.location.value = '';
@@ -501,12 +615,29 @@ els.model.addEventListener('change', () => {
   renderFilters();
   resetResults();
   saveSettings();
+  renderHistory();
 });
 els.location.addEventListener('change', () => { resetResults(); saveSettings(); });
 els.ntfy.addEventListener('change', saveSettings);
 els.onlyAvail.addEventListener('change', () => { saveSettings(); render(); });
+els.clearHistory.addEventListener('click', () => {
+  if (!confirm('Clear the restock history this checker has collected?')) return;
+  history.data = emptyHistory();
+  history.save();
+  render();
+  renderHistory();
+});
+els.radius.addEventListener('change', () => {
+  saveSettings();
+  if (state.lastResult) {
+    state.lastResult.stores = withinRadius(state.lastResult.allStores);
+    render();
+  }
+  renderHistory();
+});
 els.interval.addEventListener('change', () => { saveSettings(); schedule(); });
 els.auto.addEventListener('change', () => {
+  saveSettings();
   if (els.auto.checked && !state.lastResult) check();
   else schedule();
 });
@@ -515,7 +646,7 @@ els.notify.addEventListener('change', async () => {
     await Notification.requestPermission();
   }
 });
-window.addEventListener('focus', () => { document.title = 'iPhone Stock Checker'; });
+window.addEventListener('focus', () => { document.title = 'iPhone Stock Checker'; catchUp(); });
 
 (async function init() {
   const saved = store.get();
@@ -530,10 +661,19 @@ window.addEventListener('focus', () => { document.title = 'iPhone Stock Checker'
   if (saved.location) els.location.value = saved.location;
   if (saved.interval) els.interval.value = saved.interval;
   els.onlyAvail.checked = !!saved.onlyAvail;
+  if (saved.radius && [...els.radius.options].some((o) => o.value === saved.radius)) els.radius.value = saved.radius;
+  renderRadiusUnit();
   if (saved.ntfy) els.ntfy.value = saved.ntfy;
   if (Array.isArray(saved.retailers) && saved.retailers.length) state.retailers = new Set(saved.retailers.filter((r) => r in RETAILER_NAMES));
   renderRetailers();
   state.bridge = DEMO ? null : await detectBridge();
   renderMode();
   await loadCatalog(saved);
+  // Resume watching after a reload (e.g. Chrome unloaded the tab to save memory).
+  // Alert on anything already in stock, since the last check before the reload is lost.
+  if (saved.auto && els.location.value.trim() && state.catalog) {
+    els.auto.checked = true;
+    state.previouslyAvailable = new Set();
+    check();
+  }
 })();

@@ -89,7 +89,7 @@ async function api(url, res) {
 
 const LIB_DIR = fileURLToPath(new URL('./lib/', import.meta.url));
 // Modules the browser imports directly (shared parsing / request logic).
-const BROWSER_LIB = new Set(['/lib/apple.js', '/lib/att.js', '/lib/countries.js']);
+const BROWSER_LIB = new Set(['/lib/apple.js', '/lib/att.js', '/lib/countries.js', '/lib/history.js']);
 
 async function staticFile(url, res) {
   if (BROWSER_LIB.has(url.pathname)) {
@@ -121,6 +121,14 @@ export const server = http.createServer(async (req, res) => {
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  // A dropped connection to Apple must never take the whole checker down.
+  // Log network errors from Node's fetch (undici) and keep serving; anything
+  // else is a real bug, so still exit.
+  process.on('uncaughtException', (err) => {
+    if (String(err?.code).startsWith('UND_ERR')) return console.error('[network]', err.message);
+    console.error(err);
+    process.exit(1);
+  });
   server.listen(PORT, HOST, () => {
     console.log(`iPhone Stock Checker running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}${DEMO ? '  (demo mode)' : ''}`);
   });

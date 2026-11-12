@@ -130,6 +130,20 @@ td.cell.yes a { background: var(--ok-bg); color: var(--ok); font-weight: 600; }
 td.cell.no span { color: var(--no); }
 td.cell.new a { box-shadow: 0 0 0 2px var(--new); }
 
+.history { margin-top: 18px; }
+.history-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.history h2 { font-size: 15px; margin: 0 0 8px; }
+.history .muted, .seen { color: var(--muted); font-weight: 400; }
+.history ol { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); }
+.history li { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.history li:last-child { border-bottom: 0; }
+.history li.open { color: var(--ok); }
+.history li .when { min-width: 120px; color: var(--muted); }
+.history li .what { font-weight: 600; }
+.history li.empty-row { color: var(--muted); }
+button.link { font: inherit; font-size: 13px; background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; }
+td.store .seen { font-size: 12px; }
+
 .empty { text-align: center; padding: 40px 16px; color: var(--muted); }
 .foot { color: var(--muted); font-size: 12px; padding: 24px 16px 40px; }
 

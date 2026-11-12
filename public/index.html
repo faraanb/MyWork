@@ -53,6 +53,16 @@
         </label>
         <label class="inline"><input id="notify" type="checkbox"> Alert me when stock appears</label>
         <label class="inline"><input id="onlyAvail" type="checkbox"> Only show stores with stock</label>
+        <label class="inline">Within
+          <select id="radius">
+            <option value="0" selected>any distance</option>
+            <option value="5">5 mi</option>
+            <option value="10">10 mi</option>
+            <option value="15">15 mi</option>
+            <option value="25">25 mi</option>
+            <option value="50">50 mi</option>
+          </select>
+        </label>
       </div>
 
       <div class="row extras">
@@ -61,10 +71,18 @@
         </label>
       </div>
       <div id="mode" class="mode"></div>
+      <div id="next" class="mode" aria-live="polite"></div>
     </form>
 
     <section id="status" class="status" aria-live="polite"></section>
     <section id="results"></section>
+    <section id="history" class="history" hidden>
+      <div class="history-head">
+        <h2>Recent restocks <span class="muted">seen by this checker</span></h2>
+        <button type="button" id="clearHistory" class="link">Clear</button>
+      </div>
+      <ol id="historyList"></ol>
+    </section>
   </main>
 
   <footer class="wrap foot">
